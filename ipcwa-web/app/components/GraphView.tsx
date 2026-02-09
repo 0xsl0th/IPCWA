@@ -17,7 +17,7 @@ import ReactFlow, {
     useEdgesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Plus, Terminal, Activity, FileJson, Download, Wifi } from 'lucide-react';
+import { Plus, Terminal, Activity, FileJson, Download, Wifi, Monitor } from 'lucide-react';
 import clsx from 'clsx';
 import { CPTS_MODULES, ModuleTag } from '../lib/cpts_data';
 import CvssCalculator from './CvssCalculator';
@@ -323,50 +323,90 @@ export default function GraphView() {
         URL.revokeObjectURL(url);
     };
 
+    const updateNodeLabel = (newLabel: string) => {
+        if (!selectedNodeId) return;
+        setNodes((nds) => nds.map((node) => {
+            if (node.id === selectedNodeId) {
+                const evidenceCount = node.data.evidence?.length || 0;
+                // Reconstruct label to maintain styling/structure
+                const labelContent = evidenceCount > 0 ? (
+                    <div className="flex flex-col">
+                        <span className="font-bold cursor-pointer">{newLabel}</span>
+                        <span className="text-xs text-slate-300 mt-1 flex items-center gap-1">
+                            <FileJson className="w-3 h-3" /> {evidenceCount} Evidence items
+                        </span>
+                    </div>
+                ) : newLabel;
+
+                return { ...node, data: { ...node.data, label: labelContent } };
+            }
+            return node;
+        }));
+    };
+
     const selectedNode = nodes.find(n => n.id === selectedNodeId);
+    // Extract raw text label safely
+    const selectedNodeLabel = selectedNode
+        ? (typeof selectedNode.data.label === 'string' ? selectedNode.data.label : selectedNode.data.label.props.children[0].props.children)
+        : '';
 
     const activeChecklists = selectedNode?.data.evidence
         ? Array.from(new Set((selectedNode.data.evidence as Evidence[]).map(e => e.tag))).filter(Boolean) as ModuleTag[]
         : [];
 
     return (
-        <div className="flex h-screen w-screen bg-slate-900 text-white">
+        <div className="flex h-screen w-screen bg-slate-950 text-slate-100 font-sans">
             {/* Sidebar */}
-            <div className="w-80 border-r border-slate-700 p-4 flex flex-col gap-4 overflow-y-auto bg-slate-800 shrink-0">
-                <h2 className="text-xl font-bold mb-2 flex items-center justify-between">
-                    <span className="flex items-center gap-2"><Terminal className="w-5 h-5" /> Evidence</span>
-                    {activeTunnels.length > 0 && (
-                        <div className="flex items-center gap-1 text-[10px] text-green-400 bg-green-900/30 px-2 py-1 rounded border border-green-800 animate-pulse">
-                            <Wifi className="w-3 h-3" />
-                            <span>TUNNEL ACTIVE</span>
+            <div className="w-[420px] border-r border-slate-800 flex flex-col bg-slate-900/95 backdrop-blur-sm shrink-0 shadow-xl z-10">
+                {/* Header */}
+                <div className="p-5 border-b border-slate-800/60 bg-slate-900 sticky top-0 z-20">
+                    <h2 className="text-lg font-bold flex items-center justify-between text-slate-100">
+                        <span className="flex items-center gap-2 tracking-tight">
+                            <Terminal className="w-5 h-5 text-blue-500" />
+                            Evidence Locker
+                        </span>
+                        {activeTunnels.length > 0 && (
+                            <div className="flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 bg-emerald-950/40 px-2.5 py-1 rounded-full border border-emerald-800/60 animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+                                <Wifi className="w-3 h-3" />
+                                <span>TUNNEL ACTIVE</span>
+                            </div>
+                        )}
+                    </h2>
+                </div>
+
+                {/* Evidence List */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[300px]">
+                    {evidenceList.length === 0 && (
+                        <div className="text-center py-10 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl">
+                            <p className="text-sm">No evidence captured yet.</p>
+                            <p className="text-xs mt-1 text-slate-600">Run T2E Bridge to populate.</p>
                         </div>
                     )}
-                </h2>
-                <div className="space-y-2 flex-1 overflow-y-auto min-h-[200px] max-h-[40vh]">
-                    {evidenceList.length === 0 && <p className="text-slate-400 text-sm">No evidence found.</p>}
+
                     {evidenceList.map((file) => (
-                        <div key={file.filename} className="bg-slate-700 p-3 rounded border border-slate-600">
+                        <div key={file.filename} className="bg-slate-800/40 hover:bg-slate-800/80 transition-all duration-200 p-4 rounded-xl border border-slate-700/50 hover:border-slate-600 group shadow-sm">
                             <div
                                 onClick={() => linkEvidence(file)}
                                 className={clsx(
-                                    "cursor-pointer hover:bg-slate-600 transition-colors p-1 -m-1 rounded mb-2",
-                                    selectedNodeId ? "hover:border-blue-500 border border-transparent" : "opacity-50"
+                                    "cursor-pointer flex items-center gap-3 mb-3",
+                                    selectedNodeId ? "text-blue-200 group-hover:text-blue-100" : "text-slate-400 opacity-70"
                                 )}
                                 title={selectedNodeId ? "Click to link to selected node" : "Select a node to link"}
                             >
-                                <div className="flex items-center gap-2 mb-1">
-                                    <FileJson className="w-4 h-4 text-blue-400" />
-                                    <span className="font-semibold text-sm truncate w-full">{file.metadata.description}</span>
+                                <div className={clsx("p-2 rounded-lg", selectedNodeId ? "bg-blue-500/10 text-blue-400" : "bg-slate-700/50 text-slate-500")}>
+                                    <FileJson className="w-5 h-5" />
                                 </div>
+                                <span className="font-medium text-sm truncate w-full">{file.metadata.description}</span>
+                                {selectedNodeId && <div className="ml-auto text-xs bg-blue-600 text-white px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">Link</div>}
                             </div>
 
-                            <div className="flex flex-col gap-2 mt-2 border-t border-slate-600 pt-2">
-                                <div className="flex items-center gap-2">
-                                    <label className="text-xs text-slate-400 w-8">Tag:</label>
+                            <div className="space-y-3 pt-3 border-t border-slate-700/50">
+                                <div className="grid grid-cols-[auto_1fr] items-center gap-3">
+                                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Tag</label>
                                     <select
                                         value={file.tag}
                                         onChange={(e) => updateEvidence(file.filename, { tag: e.target.value as ModuleTag })}
-                                        className="bg-slate-800 text-xs text-white border border-slate-600 rounded px-1 py-0.5 w-full"
+                                        className="bg-slate-900 text-xs text-slate-200 border border-slate-700 rounded-md px-2 py-1.5 w-full focus:ring-1 focus:ring-blue-500 outline-none transition-all"
                                     >
                                         {Object.keys(CPTS_MODULES).map(tag => (
                                             <option key={tag} value={tag}>{tag}</option>
@@ -375,7 +415,7 @@ export default function GraphView() {
                                 </div>
 
                                 {/* CVSS Calculator Integrated */}
-                                <div className="mt-1">
+                                <div className="bg-slate-900/50 rounded-lg p-2 border border-slate-800/50">
                                     <CvssCalculator
                                         initialVector={file.cvssVector || file.cvss?.startsWith('CVSS') ? (file.cvssVector || file.cvss) : undefined}
                                         onChange={(score, vector) => updateEvidence(file.filename, { cvss: score, cvssVector: vector })}
@@ -386,37 +426,74 @@ export default function GraphView() {
                     ))}
                 </div>
 
-                <div className="mt-auto pt-4 border-t border-slate-700 flex-1 overflow-y-auto">
-                    <h3 className="font-bold mb-2 text-sm text-slate-300">Selected Node Details</h3>
-                    {selectedNode ? (
-                        <div className="text-sm bg-slate-900 p-3 rounded border border-slate-700">
-                            <div className="font-bold mb-1 text-lg">{selectedNode.id}</div>
-                            <div className="text-slate-400 mb-2">Linked Evidence: {selectedNode.data.evidence?.length || 0}</div>
+                {/* Selected Node Details - Bottom Panel */}
+                <div className="h-[45%] border-t border-slate-800 bg-slate-900/90 flex flex-col shadow-[0_-4px_20px_-5px_rgba(0,0,0,0.3)]">
+                    <div className="p-4 border-b border-slate-800/60 sticky top-0 bg-slate-900/95 backdrop-blur z-10 flex items-center justify-between">
+                        <h3 className="font-bold text-sm text-slate-100 flex items-center gap-2">
+                            <div className="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]"></div>
+                            Target Controls
+                        </h3>
+                        {selectedNode && (
+                            <span className="text-xs font-mono text-slate-500">{selectedNode.id}</span>
+                        )}
+                    </div>
 
-                            <div className="space-y-4 mt-4">
-                                {activeChecklists.map(tag => (
-                                    <div key={tag} className="border-t border-slate-700 pt-2">
-                                        <h4 className="text-blue-400 font-bold text-xs uppercase mb-1">{CPTS_MODULES[tag].title}</h4>
-                                        <ul className="space-y-1">
-                                            {CPTS_MODULES[tag].checks.map((check, i) => (
-                                                <li key={i} className="flex items-start gap-2 text-xs text-slate-300">
-                                                    <input type="checkbox" className="mt-0.5 accent-blue-500" />
-                                                    <span>{check}</span>
-                                                </li>
-                                            ))}
-                                        </ul>
+                    <div className="flex-1 overflow-y-auto p-5">
+                        {selectedNode ? (
+                            <div className="space-y-6">
+                                <div>
+                                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Target Name</label>
+                                    <input
+                                        type="text"
+                                        value={selectedNodeLabel}
+                                        onChange={(e) => updateNodeLabel(e.target.value)}
+                                        className="bg-slate-800/50 text-white border border-slate-700 rounded-lg px-3 py-2 w-full focus:border-blue-500 focus:bg-slate-800 outline-none transition-all font-medium text-sm"
+                                        placeholder="e.g. DC01, Web-Prod"
+                                    />
+                                </div>
+
+                                <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Methodology Checklists</label>
+                                        <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">{selectedNode.data.evidence?.length || 0} Artifacts Linked</span>
                                     </div>
-                                ))}
+
+                                    <div className="space-y-4">
+                                        {activeChecklists.length === 0 && (
+                                            <p className="text-xs text-slate-600 italic border border-slate-800 rounded p-3 text-center">
+                                                Link evidence with tags (Recon, Exploitation) to reveal methodology checklists.
+                                            </p>
+                                        )}
+                                        {activeChecklists.map(tag => (
+                                            <div key={tag} className="bg-slate-800/30 rounded-lg border border-slate-700/50 overflow-hidden">
+                                                <div className="bg-slate-800/60 px-3 py-2 border-b border-slate-700/50">
+                                                    <h4 className="text-blue-400 font-bold text-[11px] uppercase tracking-wide">{CPTS_MODULES[tag].title}</h4>
+                                                </div>
+                                                <ul className="p-3 space-y-2.5">
+                                                    {CPTS_MODULES[tag].checks.map((check, i) => (
+                                                        <li key={i} className="flex items-start gap-2.5 text-xs text-slate-300 hover:text-slate-100 transition-colors group">
+                                                            <input type="checkbox" className="mt-0.5 w-3.5 h-3.5 rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-offset-slate-900 focus:ring-blue-500 cursor-pointer" />
+                                                            <span className="leading-relaxed decoration-slate-600 group-hover:decoration-slate-400">{check}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    ) : (
-                        <div className="text-sm text-slate-500 italic">Select a node to view details or link evidence.</div>
-                    )}
+                        ) : (
+                            <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-3 opacity-60">
+                                <Monitor className="w-12 h-12 stroke-[1.5]" />
+                                <p className="text-sm">Select a host in the graph to view details.</p>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 
             {/* Graph Area */}
-            <div className="flex-1 relative">
+            <div className="flex-1 relative bg-slate-950">
                 <ReactFlow
                     nodes={nodes}
                     edges={edges}
@@ -426,21 +503,21 @@ export default function GraphView() {
                     onNodeClick={onNodeClick}
                     onEdgeClick={onEdgeClick}
                     fitView
-                    className="bg-slate-900"
+                    className="bg-slate-950"
                 >
-                    <Background color="#475569" gap={20} />
-                    <Controls className="bg-slate-700 border-slate-600 fill-white stroke-white text-white" />
-                    <Panel position="top-right" className="flex flex-col gap-2 items-end">
-                        <div className="flex gap-2">
+                    <Background color="#1e293b" gap={24} size={1} />
+                    <Controls className="bg-slate-800 border-slate-700 fill-slate-300 stroke-slate-300 text-slate-300 rounded-lg overflow-hidden shadow-xl" />
+                    <Panel position="top-right" className="flex flex-col gap-3 m-4">
+                        <div className="flex gap-3">
                             <button
                                 onClick={addNode}
-                                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded shadow-lg transition-colors"
+                                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white px-5 py-2.5 rounded-lg shadow-lg shadow-blue-900/20 transition-all font-medium text-sm border border-blue-500/50"
                             >
                                 <Plus className="w-4 h-4" /> Add Host
                             </button>
                             <button
                                 onClick={generateNarrativeReport}
-                                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded shadow-lg transition-colors"
+                                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white px-5 py-2.5 rounded-lg shadow-lg shadow-emerald-900/20 transition-all font-medium text-sm border border-emerald-500/50"
                             >
                                 <Download className="w-4 h-4" /> Generate Report
                             </button>

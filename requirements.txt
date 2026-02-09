@@ -1,0 +1,4 @@
+python-dateutil
+# Standard libraries are used for most functionality.
+# platform-specific screenshotting might use subprocess calls, but libraries like MSS or PyAutoGUI could be used if allowed.
+# Sticking to subprocess for 'scrot'/'screencapture' to avoid heavy dependencies for now.

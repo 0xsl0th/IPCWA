@@ -1,8 +1,8 @@
-# IPCWA Exam Day Quickstart Guide
+# IPCWA Quickstart Guide
 
-**"Situational Awareness is King."**
+**"Situational Awareness Tool."**
 
-## 1. Start the Infrastructure (Do this immediately)
+## 1. Start the Infrastructure 
 Open a terminal and run the "Active State Monitor". This will track your tunnels (Ligolo/Chisel) automatically.
 ```bash
 # In ~/Code/IPCWA

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import ReactFlow, {
     Controls,
     Background,
@@ -15,12 +15,19 @@ import ReactFlow, {
     Panel,
     useNodesState,
     useEdgesState,
+    ReactFlowProvider,
+    ConnectionMode,
+    MarkerType
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Plus, Terminal, Activity, FileJson, Download, Wifi, Monitor } from 'lucide-react';
+import { Terminal, FileJson, Share2, Shield, AlertTriangle, Download, Plus, Wifi, Monitor, Save } from 'lucide-react';
 import clsx from 'clsx';
 import { CPTS_MODULES, ModuleTag } from '../lib/cpts_data';
 import CvssCalculator from './CvssCalculator';
+import { NetworkToolbar } from './NetworkToolbar';
+import { HostNode } from './nodes/HostNode';
+import { SubnetNode } from './nodes/SubnetNode';
+import { IconNode } from './nodes/IconNode';
 
 interface Evidence {
     filename: string;
@@ -35,25 +42,32 @@ interface Evidence {
     tag?: ModuleTag;
     cvss?: string;
     cvssVector?: string;
-    command_output?: string; // Phase 6 addition
+    command_output?: string;
 }
 
 const initialNodes: Node[] = [
     {
         id: '1',
-        data: { label: 'Attacker Machine (Kali)' },
+        type: 'host',
+        data: { label: 'Attacker Machine (Kali)', ip: '10.10.14.x' },
         position: { x: 50, y: 50 },
-        type: 'input',
-        style: { background: '#1e293b', color: '#fff', border: '1px solid #94a3b8', padding: '10px', borderRadius: '5px' },
     },
 ];
 
-export default function GraphView() {
+const GraphContent = () => {
+    const reactFlowWrapper = useRef<HTMLDivElement>(null);
     const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+    const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
     const [evidenceList, setEvidenceList] = useState<Evidence[]>([]);
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
     const [activeTunnels, setActiveTunnels] = useState<string[]>([]);
+
+    const nodeTypes = useMemo(() => ({
+        host: HostNode,
+        subnet: SubnetNode,
+        icon: IconNode
+    }), []);
 
     // Fetch Evidence
     useEffect(() => {
@@ -82,72 +96,107 @@ export default function GraphView() {
                     }
                 })
                 .catch(err => console.error(err));
-        }, 3000); // 3s polling
+        }, 3000);
         return () => clearInterval(interval);
     }, []);
 
     // Update Edges based on Active Tunnels
-    // Simplistic mapping: If "ligolo" is active, find edges labeled "ligolo" or just update all "Tunnel" edges
-    // For this MVP, if ANY tunnel is active, we'll animate ALL edges to show "flow". 
-    // In a real implementation, we'd map specific tunnel IDs.
     useEffect(() => {
         setEdges(eds => eds.map(e => {
-            // If we have any active tunnel process, animate connection between Attacker (id 1) and others?
-            // Or just update the heartbeat indicator.
             return e;
         }));
     }, [activeTunnels]);
 
     const onConnect: OnConnect = useCallback(
-        (params) => setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: '#22c55e', strokeWidth: 2 } }, eds)),
+        (params) => setEdges((eds) => addEdge({ ...params, type: 'default', markerEnd: { type: MarkerType.ArrowClosed } }, eds)),
         [setEdges],
     );
 
-    const onEdgeClick = (_: any, edge: Edge) => {
-        setEdges((eds) => eds.map((e) => {
-            if (e.id === edge.id) {
-                const matchesTunnel = activeTunnels.some(t => t.toLowerCase().includes('ligolo') || t.toLowerCase().includes('chisel'));
-                const isUp = e.style?.stroke === '#22c55e';
+    const onDragOver = useCallback((event: React.DragEvent) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+    }, []);
 
-                // Manual toggle still required if heartbeat doesn't map 1:1, but heartbeat can override
+    const onDrop = useCallback(
+        (event: React.DragEvent) => {
+            event.preventDefault();
+
+            const type = event.dataTransfer.getData('application/reactflow');
+            const payloadStr = event.dataTransfer.getData('application/reactflow/payload');
+            const payload = payloadStr ? JSON.parse(payloadStr) : {};
+
+            if (typeof type === 'undefined' || !type) {
+                return;
+            }
+
+            const position = reactFlowInstance.screenToFlowPosition({
+                x: event.clientX,
+                y: event.clientY,
+            });
+
+            // Name mapping logic
+            let label = `${type} ${nodes.length + 1}`;
+
+            if (type === 'icon') {
+                if (payload.type === 'globe') label = 'Internet';
+                if (payload.type === 'server') label = 'Server';
+                if (payload.type === 'files') label = 'File Share';
+            } else if (type === 'host') {
+                label = `Host ${nodes.length + 1}`;
+                if (!payload.ip) {
+                    payload.ip = `10.10.10.${nodes.length + 1}`;
+                }
+            } else if (type === 'subnet') {
+                label = 'New Subnet';
+            }
+
+            // Z-Ordering: Subnets behind everything (-1), Hosts/Icons above (10)
+            const zIndex = type === 'subnet' ? -1 : 10;
+
+            const newNode: Node = {
+                id: `${type}-${nodes.length + 1}-${Date.now()}`,
+                type,
+                position,
+                zIndex,
+                data: { label, ...payload },
+                style: type === 'subnet' ? { width: 300, height: 200 } : undefined
+            };
+
+            setNodes((nds) => nds.concat(newNode));
+        },
+        [reactFlowInstance, nodes, setNodes],
+    );
+
+    const onNodeClick = useCallback((_: any, node: Node) => {
+        setSelectedNodeId(node.id);
+    }, []);
+
+    const onPaneClick = useCallback(() => {
+        setSelectedNodeId(null);
+    }, []);
+
+    const linkEvidence = (file: Evidence) => {
+        if (!selectedNodeId) return;
+        setNodes((nds) => nds.map((node) => {
+            if (node.id === selectedNodeId) {
+                const currentEvidence = node.data.evidence || [];
+                if (currentEvidence.find((e: Evidence) => e.filename === file.filename)) return node;
+
+                const newEvidence = [...currentEvidence, file];
                 return {
-                    ...e,
-                    animated: !isUp,
-                    style: {
-                        ...e.style,
-                        stroke: isUp ? '#ef4444' : '#22c55e',
-                        strokeDasharray: isUp ? '5,5' : undefined
-                    },
+                    ...node,
+                    data: {
+                        ...node.data,
+                        evidence: newEvidence
+                    }
                 };
             }
-            return e;
+            return node;
         }));
-    };
-
-    const addNode = () => {
-        const id = (nodes.length + 1).toString();
-        const newNode: Node = {
-            id,
-            data: { label: `Target Host ${id}`, evidence: [] },
-            position: { x: Math.random() * 400 + 100, y: Math.random() * 400 + 100 },
-            type: 'default',
-            style: { background: '#334155', color: '#fff', border: '1px solid #cbd5e1', padding: '10px', borderRadius: '5px', width: 180 },
-        };
-        setNodes((nds) => nds.concat(newNode));
-    };
-
-    const onNodeClick = (_: any, node: Node) => {
-        setSelectedNodeId(node.id);
     };
 
     const updateEvidence = async (filename: string, updates: Partial<Evidence>) => {
         setEvidenceList(prev => prev.map(e => e.filename === filename ? { ...e, ...updates } : e));
-
-        setNodes(nds => nds.map(node => {
-            if (!node.data.evidence) return node;
-            const newEvidence = node.data.evidence.map((e: Evidence) => e.filename === filename ? { ...e, ...updates } : e);
-            return { ...node, data: { ...node.data, evidence: newEvidence } };
-        }));
 
         try {
             await fetch('/api/evidence/update', {
@@ -160,166 +209,27 @@ export default function GraphView() {
         }
     };
 
-    const linkEvidence = (evidence: Evidence) => {
-        if (!selectedNodeId) return;
-
-        setNodes((nds) => nds.map((node) => {
-            if (node.id === selectedNodeId) {
-                const currentEvidence = node.data.evidence || [];
-                if (currentEvidence.find((e: Evidence) => e.filename === evidence.filename)) {
-                    return node;
-                }
-                const newEvidence = [...currentEvidence, evidence];
-                return {
-                    ...node,
-                    data: {
-                        ...node.data,
-                        evidence: newEvidence,
-                        label: (
-                            <div className="flex flex-col">
-                                <span className="font-bold cursor-pointer">{typeof node.data.label === 'string' ? node.data.label : node.data.label.props.children[0].props.children}</span>
-                                <span className="text-xs text-slate-300 mt-1 flex items-center gap-1">
-                                    <FileJson className="w-3 h-3" /> {newEvidence.length} Evidence items
-                                </span>
-                            </div>
-                        )
-                    }
-                };
-            }
-            return node;
-        }));
-    };
-
-    // NARRATIVE GENERATION: Phase 6 Refinement - Timestamp-Based Path Replay
     const generateNarrativeReport = () => {
-        const startNode = nodes.find(n => n.id === '1'); // Assuming 1 is Attacker
-        if (!startNode) return;
+        console.log("Generating report...");
+        const report = `
+# Engagement Report
 
-        let report = `# Penetration Test Report\n\n`;
-        report += `**Date**: ${new Date().toLocaleDateString()}  \n`;
-        report += `**Status**: ${activeTunnels.length > 0 ? "Active Tunnels Detected (" + activeTunnels.join(', ') + ")" : "Assessment Complete"}\n\n`;
+**Generated by IPCWA**
+**Date:** ${new Date().toISOString().split('T')[0]}
 
-        report += `## Executive Summary\n`;
-        report += `This report documents the penetration test conducted using IPCWA. It details the attack path taken and highlights critical vulnerabilities discovered.\n\n`;
+## Executive Summary
+During this engagement, ${nodes.length} hosts were identified...
 
-        // --- PART 1: WALKTHROUGH (The Story) ---
-        report += `## 1. Attack Path Walkthrough\n`;
-        report += `> This section chronicles the chain of compromise in chronological order.\n\n`;
-
-        // Sort nodes by the timestamp of their EARLIEST evidence
-        const nodesWithEvidence = nodes.filter(n => n.data.evidence && n.data.evidence.length > 0);
-
-        // If Attacker machine has no evidence but is start, include it first? 
-        // Or just tell the story based on evidence. 
-        // Let's include all nodes but sort them. Nodes without evidence go last or based on creation if tracked.
-        // For simplicity: We will focus on nodes WITH evidence for the narrative, plus the start node.
-
-        const sortedNodes = nodes.sort((a, b) => {
-            if (a.id === '1') return -1; // Always start with attacker
-            if (b.id === '1') return 1;
-
-            const aEvidence = (a.data.evidence as Evidence[]) || [];
-            const bEvidence = (b.data.evidence as Evidence[]) || [];
-
-            if (aEvidence.length === 0) return 1; // Push to end
-            if (bEvidence.length === 0) return -1;
-
-            // Get earliest timestamp for A
-            const aMin = Math.min(...aEvidence.map(e => new Date(e.metadata.timestamp).getTime()));
-            const bMin = Math.min(...bEvidence.map(e => new Date(e.metadata.timestamp).getTime()));
-
-            return aMin - bMin;
-        });
-
-        const traversalOrder = sortedNodes.map(n => n.id);
-
-        traversalOrder.forEach((nodeId, index) => {
-            const node = nodes.find(n => n.id === nodeId);
-            if (!node) return;
-
-            // Skip nodes without evidence unless it's the start node
-            if (node.id !== '1' && (!node.data.evidence || node.data.evidence.length === 0)) return;
-
-            const nodeLabel = typeof node.data.label === 'string'
-                ? node.data.label
-                : node.data.label.props.children[0].props.children;
-
-            report += `### Step ${index + 1}: ${nodeLabel}\n`;
-
-            if (index === 0) {
-                report += `*Entry point of the assessment.*\n\n`;
-            }
-
-            const evidenceItems = (node.data.evidence || []) as Evidence[];
-            if (evidenceItems.length > 0) {
-                const sortedEvidence = [...evidenceItems].sort((a, b) => new Date(a.metadata.timestamp).getTime() - new Date(b.metadata.timestamp).getTime());
-
-                sortedEvidence.forEach(e => {
-                    report += `**Action**: ${e.metadata.description}\n`;
-                    report += `\`${new Date(e.metadata.timestamp).toLocaleTimeString()}\`\n\n`;
-
-                    // Display Command String AND Output (if available)
-                    if (e.parsed.captured_commands && e.parsed.captured_commands.length > 0) {
-                        report += `**Command Executed**:\n`;
-                        report += `\`\`\`bash\n${e.parsed.captured_commands.join('\n')}\n\`\`\`\n`;
-                    }
-
-                    if (e.parsed.command_output) {
-                        report += `**Command Output**:\n`;
-                        report += `\`\`\`\n${e.parsed.command_output}\n\`\`\`\n`;
-                    } else if (e.parsed.screenshot_path) {
-                        report += `*(See attached screenshot for output: ${e.parsed.screenshot_path})*\n`;
-                    }
-
-                    report += `\n`;
-                });
-            } else if (node.id === '1') {
-                report += `*Infrastructure initialized.*\n\n`;
-            } else {
-                report += `No specific evidence recorded for this hop.\n\n`;
-            }
-
-            if (index < traversalOrder.length - 1) {
-                // Check if next node has evidence to see if it's a real step
-                const nextNode = nodes.find(n => n.id === traversalOrder[index + 1]);
-                if (nextNode && (nextNode.data.evidence?.length > 0))
-                    report += `⬇ *Moving to next target...*\n\n`;
-            }
-        });
-
-        // --- PART 2: FINDINGS (The Technical Details) ---
-        report += `\n---\n\n## 2. Technical Findings\n`;
-        report += `> Detailed analysis of identified vulnerabilities.\n\n`;
-
-        const allEvidence = nodes.flatMap(n => n.data.evidence || []) as Evidence[];
-        // Filter for items with CVSS or Exploit tags
-        const vulnerabilities = allEvidence.filter(e => e.cvss || e.tag === 'Exploitation' || e.tag === 'Post-Exploitation');
-
-        if (vulnerabilities.length === 0) {
-            report += `No specific vulnerabilities with CVSS scores recorded.\n`;
-        } else {
-            vulnerabilities.forEach((v, i) => {
-                report += `### 2.${i + 1} [${v.cvss ? "CVSS " + v.cvss : "Unscored"}] ${v.metadata.description}\n`;
-                if (v.cvssVector) report += `**Vector**: \`${v.cvssVector}\`\n\n`;
-
-                // Find host
-                const hostNode = nodes.find(n => (n.data.evidence as Evidence[]).some(e => e.filename === v.filename));
-                const hostName = hostNode ? (typeof hostNode.data.label === 'string' ? hostNode.data.label : hostNode.data.label.props.children[0].props.children) : "Unknown Host";
-
-                report += `**Affected Asset**: ${hostName}\n`;
-                report += `**Category**: ${v.tag}\n\n`;
-                report += `**Description/Proof**:\nRefer to Step in Walkthrough for full execution details.\n\n`;
-            });
-        }
+## Findings
+${evidenceList.filter(e => e.cvss).map(e => `### ${e.metadata.description}\n**CVSS:** ${e.cvss}\n`).join('\n')}
+         `;
 
         const blob = new Blob([report], { type: 'text/markdown' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `IPCWA_Exam_Report_${new Date().toISOString().split('T')[0]}.md`;
-        document.body.appendChild(a);
+        a.download = `IPCWA_Report_${Date.now()}.md`;
         a.click();
-        document.body.removeChild(a);
         URL.revokeObjectURL(url);
     };
 
@@ -327,27 +237,17 @@ export default function GraphView() {
         if (!selectedNodeId) return;
         setNodes((nds) => nds.map((node) => {
             if (node.id === selectedNodeId) {
-                const evidenceCount = node.data.evidence?.length || 0;
-                // Reconstruct label to maintain styling/structure
-                const labelContent = evidenceCount > 0 ? (
-                    <div className="flex flex-col">
-                        <span className="font-bold cursor-pointer">{newLabel}</span>
-                        <span className="text-xs text-slate-300 mt-1 flex items-center gap-1">
-                            <FileJson className="w-3 h-3" /> {evidenceCount} Evidence items
-                        </span>
-                    </div>
-                ) : newLabel;
-
-                return { ...node, data: { ...node.data, label: labelContent } };
+                return { ...node, data: { ...node.data, label: newLabel } };
             }
             return node;
         }));
     };
 
     const selectedNode = nodes.find(n => n.id === selectedNodeId);
-    // Extract raw text label safely
+
+    // Flexible label extraction
     const selectedNodeLabel = selectedNode
-        ? (typeof selectedNode.data.label === 'string' ? selectedNode.data.label : selectedNode.data.label.props.children[0].props.children)
+        ? (typeof selectedNode.data.label === 'string' ? selectedNode.data.label : 'Node')
         : '';
 
     const activeChecklists = selectedNode?.data.evidence
@@ -356,6 +256,8 @@ export default function GraphView() {
 
     return (
         <div className="flex h-screen w-screen bg-slate-950 text-slate-100 font-sans">
+            <NetworkToolbar />
+
             {/* Sidebar */}
             <div className="w-[420px] border-r border-slate-800 flex flex-col bg-slate-900/95 backdrop-blur-sm shrink-0 shadow-xl z-10">
                 {/* Header */}
@@ -493,7 +395,7 @@ export default function GraphView() {
             </div>
 
             {/* Graph Area */}
-            <div className="flex-1 relative bg-slate-950">
+            <div className="flex-1 relative bg-slate-950" ref={reactFlowWrapper}>
                 <ReactFlow
                     nodes={nodes}
                     edges={edges}
@@ -501,7 +403,12 @@ export default function GraphView() {
                     onEdgesChange={onEdgesChange}
                     onConnect={onConnect}
                     onNodeClick={onNodeClick}
-                    onEdgeClick={onEdgeClick}
+                    onPaneClick={onPaneClick}
+                    nodeTypes={nodeTypes}
+                    onInit={setReactFlowInstance}
+                    onDrop={onDrop}
+                    onDragOver={onDragOver}
+                    connectionMode={ConnectionMode.Loose}
                     fitView
                     className="bg-slate-950"
                 >
@@ -509,12 +416,6 @@ export default function GraphView() {
                     <Controls className="bg-slate-800 border-slate-700 fill-slate-300 stroke-slate-300 text-slate-300 rounded-lg overflow-hidden shadow-xl" />
                     <Panel position="top-right" className="flex flex-col gap-3 m-4">
                         <div className="flex gap-3">
-                            <button
-                                onClick={addNode}
-                                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white px-5 py-2.5 rounded-lg shadow-lg shadow-blue-900/20 transition-all font-medium text-sm border border-blue-500/50"
-                            >
-                                <Plus className="w-4 h-4" /> Add Host
-                            </button>
                             <button
                                 onClick={generateNarrativeReport}
                                 className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white px-5 py-2.5 rounded-lg shadow-lg shadow-emerald-900/20 transition-all font-medium text-sm border border-emerald-500/50"
@@ -526,5 +427,13 @@ export default function GraphView() {
                 </ReactFlow>
             </div>
         </div>
+    );
+};
+
+export default function GraphView() {
+    return (
+        <ReactFlowProvider>
+            <GraphContent />
+        </ReactFlowProvider>
     );
 }
